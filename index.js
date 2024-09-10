@@ -1,7 +1,18 @@
 import "dotenv/config";
 import Snoowrap from "snoowrap";
 import { Octokit } from "@octokit/rest";
+import express from 'express';
 
+// Custom log function with timestamp
+function logWithTimestamp(message) {
+  const timestamp = new Date().toLocaleTimeString('en-US', { hour12: true });
+  console.log(`[${timestamp}] ${message}`);
+}
+
+// Initialize Express app
+const app = express();
+
+// Octokit and Snoowrap configuration
 const octokit = new Octokit({ auth: `token ${process.env.ghToken}` });
 
 const snoowrapConfig = {
@@ -29,16 +40,15 @@ const subreddits = [
 const updateQueue = [];
 let processedLicenses = new Set();
 
-console.log("Bot is starting up and monitoring subreddits...");
+logWithTimestamp("Bot is starting up and monitoring subreddits...");
 
 function pollSubreddits() {
   const delay = 20000; // 20 seconds
   processedLicenses = new Set(); // Reset processed licenses for this cycle
-  console.log("Polling subreddits for new comments...");
 
   Promise.all(subreddits.map(fetchAndProcessComments))
     .catch((error) => {
-      console.error(`Error fetching comments: ${error.message}`);
+      logWithTimestamp(`Error fetching comments: ${error.message}`);
       setTimeout(pollSubreddits, 600000); // Switch to 10-minute delay on error
     })
     .finally(() => setTimeout(pollSubreddits, delay));
@@ -48,7 +58,7 @@ function fetchAndProcessComments(subreddit) {
   return client.getSubreddit(subreddit).getNewComments({ limit: 100 })
     .then((comments) => comments.forEach(processComment))
     .catch((error) => {
-      console.error(`Error fetching comments from subreddit ${subreddit}: ${error.message}`);
+      logWithTimestamp(`Error fetching comments from subreddit ${subreddit}: ${error.message}`);
     });
 }
 
@@ -62,7 +72,7 @@ function processComment(comment) {
 
   if (newLicenses.length > 0) {
     newLicenses.forEach((license) => processedLicenses.add(license)); // Mark these licenses as processed
-    console.log(`Processing comment ID ${comment.id} with License ID's: ${newLicenses.join(', ')}`);
+    logWithTimestamp(`Processing comment ID ${comment.id} with License ID's: ${newLicenses.join(', ')}`);
     enqueueUpdate(() => updateGist(newLicenses));
   }
 }
@@ -106,7 +116,7 @@ async function updateGist(licenseCommands) {
     const uniqueContent = mergeUniqueContent(existingContent, licenseCommands);
 
     if (uniqueContent.length === existingContent.length) {
-      console.log("No new licenses added: All found licenses are already present.");
+      logWithTimestamp("No new licenses added: All found licenses are already present.");
       return;
     }
 
@@ -135,9 +145,9 @@ async function updateLatestGist(licenseCommands) {
 
     if (uniqueContent.length !== existingContent.length || !uniqueContent.every((line, index) => line === existingContent[index])) {
       await updateGistContent(gistId, "Latest Steam Games", uniqueContent.join("\n"));
-      console.log("Gist updated with the latest 40 games.");
+      logWithTimestamp("Gist updated with the latest 40 games.");
     } else {
-      console.log("No new unique licenses found for the latest Gist: Content is up-to-date.");
+      logWithTimestamp("No new unique licenses found for the latest Gist: Content is up-to-date.");
     }
   } catch (error) {
     handleGistError(error, () => enqueueUpdate(() => updateLatestGist(licenseCommands)), "Latest Steam Games");
@@ -147,7 +157,7 @@ async function updateLatestGist(licenseCommands) {
 async function updateGistContent(gistId, filename, content) {
   try {
     await octokit.gists.update({ gist_id: gistId, files: { [filename]: { content } } });
-    console.log(`Gist content for ${filename} updated successfully.`);
+    logWithTimestamp(`Gist content for ${filename} updated successfully.`);
   } catch (error) {
     throw error; // Re-throw to be caught by the caller
   }
@@ -155,11 +165,23 @@ async function updateGistContent(gistId, filename, content) {
 
 function handleGistError(error, retryCallback, gistName) {
   if (error.status === 409) {
-    console.error(`Conflict error while updating Gist (${gistName}): ${error.message}. Retrying in 5 seconds...`);
+    logWithTimestamp(`Conflict error while updating Gist (${gistName}): ${error.message}. Retrying in 5 seconds...`);
     setTimeout(retryCallback, 5000); // Retry after 5 seconds
   } else {
-    console.error(`Error updating Gist (${gistName}): ${error.message}`);
+    logWithTimestamp(`Error updating Gist (${gistName}): ${error.message}`);
   }
 }
 
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.send('Bot is alive and running.');
+});
+
+// Start the Express server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  logWithTimestamp(`Health check endpoint running on port ${PORT}`);
+});
+
+// Start polling subreddits
 pollSubreddits();

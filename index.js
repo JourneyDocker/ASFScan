@@ -2,11 +2,9 @@ import "dotenv/config";
 import Snoowrap from "snoowrap";
 import { Octokit } from "@octokit/rest";
 
-const octokit = new Octokit({
-  auth: `token ${process.env.ghToken}`,
-});
+const octokit = new Octokit({ auth: `token ${process.env.ghToken}` });
 
-const creds = {
+const snoowrapConfig = {
   userAgent: process.env.userAgent,
   clientId: process.env.clientId,
   clientSecret: process.env.clientSecret,
@@ -14,10 +12,9 @@ const creds = {
   password: process.env.RedditPassword,
 };
 
-// Build Snoowrap client
-const client = new Snoowrap(creds);
+const client = new Snoowrap(snoowrapConfig);
 const BOT_START = Date.now() / 1000;
-const ids = [];
+const processedCommentIds = new Set();
 
 const subreddits = [
   "FreeGameFindings",
@@ -31,144 +28,115 @@ const subreddits = [
 
 console.log("Bot is starting up and monitoring subreddits...");
 
-function checkForComments() {
-  let delay = 20000; // 20 seconds
-
+function pollSubreddits() {
+  const delay = 20000; // 20 seconds
   console.log("Polling subreddits for new comments...");
 
-  subreddits.forEach((subreddit) => {
-    client
-      .getSubreddit(subreddit)
-      .getNewComments({ limit: 100 })
-      .then((comments) => {
-        comments.forEach((comment) => {
-          handleComment(comment);
-        });
-      })
-      .catch((error) => {
-        console.error(`Error fetching comments from subreddit ${subreddit}: ${error.message}`);
-        console.log("Switching to 10-minute delay due to error.");
-        delay = 600000; // 10 minutes
-      });
-  });
-
-  setTimeout(checkForComments, delay);
+  Promise.all(subreddits.map(fetchAndProcessComments))
+    .catch((error) => {
+      console.error(`Error fetching comments: ${error.message}`);
+      setTimeout(pollSubreddits, 600000); // Switch to 10-minute delay on error
+    })
+    .finally(() => setTimeout(pollSubreddits, delay));
 }
 
-checkForComments();
-
-function handleComment(comment) {
-  if (!ids.includes(comment.id)) {
-    ids.push(comment.id);
-    handleMessage(comment);
-  }
+function fetchAndProcessComments(subreddit) {
+  return client.getSubreddit(subreddit).getNewComments({ limit: 100 })
+    .then((comments) => comments.forEach(processComment))
+    .catch((error) => {
+      console.error(`Error fetching comments from subreddit ${subreddit}: ${error.message}`);
+    });
 }
 
-function handleMessage(comment) {
-  if (comment.created_utc < BOT_START) {
-    //console.log(`Skipping old comment ID ${comment.id}`);
-    return;
-  }
+function processComment(comment) {
+  if (comment.created_utc < BOT_START || processedCommentIds.has(comment.id)) return;
 
-  const licensePattern = /!addlicense\s+ASF\s+([as])\/([0-9,]+)/gi;
-  let matchLicense;
-  const licenseCommands = new Set();
-
-  while ((matchLicense = licensePattern.exec(comment.body)) !== null) {
-    const licenseType = matchLicense[1];
-    const licenseIds = matchLicense[2].split(',');
-
-    // Extracting only the `a/{numbers}` or `s/{numbers}` part
-    const asfMsgs = licenseIds.map(id => `${licenseType}/${id}`);
-    asfMsgs.forEach(asfMsg => licenseCommands.add(asfMsg));
-  }
+  processedCommentIds.add(comment.id);
+  const licenseCommands = extractLicenseCommands(comment.body);
 
   if (licenseCommands.size > 0) {
-    console.log(`Found commands in comment ID ${comment.id}: ${Array.from(licenseCommands).join(', ')}`);
+    console.log(`Processing comment ID ${comment.id} with License ID's: ${Array.from(licenseCommands).join(', ')}`);
     updateGist(Array.from(licenseCommands));
-  } else {
-    //console.log(`No valid license commands found in comment ID ${comment.id}`);
   }
 }
 
-async function updateGist(asfMsgs) {
-  try {
-    const gist = await octokit.gists.get({ gist_id: process.env.gistId });
-    const existingContent = gist.data.files["Steam Codes"].content.split("\n");
+function extractLicenseCommands(commentBody) {
+  const licensePattern = /!addlicense\s+(?:asf\s+)?([as]\/[0-9]+(?:,[as]\/[0-9]+)*)/gi;
+  const licenseCommands = new Set();
+  let match;
 
-    // Filter out duplicate licenses
-    const uniqueMsgs = new Set([...existingContent, ...asfMsgs]);
-    if (uniqueMsgs.size === existingContent.length) {
-      console.log("Duplicate licenses detected; no new entries added.");
+  while ((match = licensePattern.exec(commentBody)) !== null) {
+    match[1].split(',').forEach((license) => licenseCommands.add(license.trim()));
+  }
+
+  return licenseCommands;
+}
+
+async function updateGist(licenseCommands) {
+  try {
+    const gistId = process.env.gistId;
+    const gist = await octokit.gists.get({ gist_id: gistId });
+    const existingContent = gist.data.files["Steam Codes"].content.split("\n");
+    const uniqueContent = mergeUniqueContent(existingContent, licenseCommands);
+
+    if (uniqueContent.length === existingContent.length) {
+      console.log("No new licenses added: All found licenses are already present.");
       return;
     }
 
-    // Combine existing and new licenses, ensuring uniqueness
-    const newContent = Array.from(uniqueMsgs).join("\n");
-
-    // Update the main Gist with unique values only
-    await updateGistContent(process.env.gistId, "Steam Codes", newContent);
-    console.log(`Successfully updated Gist with new licenses: ${asfMsgs.join(', ')}`);
-
-    // Updating the gist for the latest 40 games, with duplicate check
-    await updateLatestGist(asfMsgs);
+    await updateGistContent(gistId, "Steam Codes", uniqueContent.join("\n"));
+    //console.log(`Gist updated with new licenses: ${licenseCommands.join(', ')}`);
+    await updateLatestGist(licenseCommands);
   } catch (error) {
-    console.error(`Error updating Gist: ${error.message}`);
-
-    // Retry logic for 409 Conflict
-    if (error.status === 409) {
-      console.log("Conflict error encountered; retrying update in 5 seconds...");
-      setTimeout(() => updateGist(asfMsgs), 5000); // Retry after 5 seconds
-    }
+    handleGistError(error, () => updateGist(licenseCommands), "Steam Codes");
   }
 }
 
-async function updateGistContent(gistId, filename, newContent) {
+function mergeUniqueContent(existingContent, newContent) {
+  const uniqueSet = new Set([...existingContent, ...newContent]);
+  return Array.from(uniqueSet);
+}
+
+async function updateLatestGist(licenseCommands) {
   try {
-    await octokit.gists.update({
-      gist_id: gistId,
-      files: {
-        [filename]: {
-          content: newContent,
-        },
-      },
-    });
+    const gistId = "2a611b12813fc06e17b89fcf00834e8c";
+    const gist = await octokit.gists.get({ gist_id: gistId });
+    const existingContent = gist.data.files["Latest Steam Games"].content.split("\n");
+    const uniqueContent = mergeUniqueContent(existingContent, licenseCommands);
+
+    if (uniqueContent.length > 40) {
+      uniqueContent.splice(0, uniqueContent.length - 40); // Keep only the last 40 entries
+    }
+
+    if (uniqueContent.length === existingContent.length) {
+      console.log("No new unique licenses found for the latest Gist: Content is up-to-date.");
+      return;
+    }
+
+    await updateGistContent(gistId, "Latest Steam Games", uniqueContent.join("\n"));
+    //console.log("Gist updated with the latest 40 games.");
+  } catch (error) {
+    handleGistError(error, () => updateLatestGist(licenseCommands), "Latest Steam Games");
+  }
+}
+
+async function updateGistContent(gistId, filename, content) {
+  try {
+    await octokit.gists.update({ gist_id: gistId, files: { [filename]: { content } } });
     console.log(`Gist content for ${filename} updated successfully.`);
   } catch (error) {
     console.error(`Failed to update Gist content for ${filename}: ${error.message}`);
-    throw error; // Re-throw the error to be caught by the caller
+    throw error; // Re-throw to be caught by the caller
   }
 }
 
-async function updateLatestGist(asfMsgs) {
-  try {
-    const gist = await octokit.gists.get({ gist_id: "2a611b12813fc06e17b89fcf00834e8c" });
-    const existingContent = gist.data.files["Latest Steam Games"].content.split("\n");
+function handleGistError(error, retryCallback, gistName) {
+  console.error(`Error updating Gist (${gistName}): ${error.message}`);
 
-    // Filter out duplicate licenses
-    const uniqueMsgs = new Set([...existingContent, ...asfMsgs]);
-    if (uniqueMsgs.size === existingContent.length) {
-      console.log("No new unique licenses found for the latest Gist.");
-      return;
-    }
-
-    // Combine existing and new licenses, ensuring uniqueness and limit to 40 entries
-    let newContent = Array.from(uniqueMsgs).join("\n");
-    const lines = newContent.split("\n");
-    if (lines.length > 40) {
-      newContent = lines.slice(lines.length - 40).join("\n");
-    }
-
-    // Update the Gist with the latest 40 unique licenses
-    await updateGistContent("2a611b12813fc06e17b89fcf00834e8c", "Latest Steam Games", newContent);
-    console.log("Successfully updated Gist with the latest 40 games.");
-  } catch (error) {
-    console.error(`Error updating the latest Gist: ${error.message}`);
-
-    // Retry logic for 409 Conflict
-    if (error.status === 409) {
-      console.log("Conflict error encountered while updating latest Gist; retrying in 5 seconds...");
-      setTimeout(() => updateLatestGist(asfMsgs), 5000); // Retry after 5 seconds
-    }
+  if (error.status === 409) {
+    console.log("Conflict error encountered; retrying update in 5 seconds...");
+    setTimeout(retryCallback, 5000); // Retry after 5 seconds
   }
 }
+
+pollSubreddits();

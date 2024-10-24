@@ -1,5 +1,5 @@
 import "dotenv/config";
-import snoowrap from "snoowrap"
+import snoowrap from "snoowrap";
 import { Octokit } from "@octokit/rest";
 import express from "express";
 
@@ -48,7 +48,11 @@ function pollSubreddits() {
 
   Promise.all(subreddits.map(fetchAndProcessComments))
     .catch((error) => {
-      logWithTimestamp(`Error fetching comments: ${error.message}`, "ERROR");
+      if (error instanceof AggregateError) {
+        logWithTimestamp("Multiple errors occurred while fetching comments: AggregateError", "ERROR");
+      } else {
+        logWithTimestamp(`Error fetching comments: ${error.message}`, "ERROR");
+      }
       setTimeout(pollSubreddits, 600000); // Switch to 10-minute delay on error
     })
     .finally(() => {
@@ -61,19 +65,24 @@ function fetchAndProcessComments(subreddit) {
     .getNewComments({ limit: 100 })
     .then((comments) => {
       comments.forEach((comment) => processComment(comment, subreddit));
-
-      // Reset poll delay to the default value upon successful fetch
-      pollDelay = 20000;
+      pollDelay = 20000; // Reset poll delay on success
     })
     .catch((error) => {
-      logWithTimestamp(`Error fetching comments from subreddit ${subreddit}: ${error.message}`, "ERROR");
-
-      // Handle specific errors like 500 or 502
-      if (error.statusCode === 500 || error.statusCode === 502) {
-        pollDelay = Math.min(pollDelay * 2, 3600000); // Exponential backoff, cap at 1 hour
-        logWithTimestamp(`Increasing poll delay to ${pollDelay / 1000} seconds due to error.`, "WARN");
-      }
+      handleFetchError(error, subreddit);
     });
+}
+
+function handleFetchError(error, subreddit) {
+  if (error.statusCode === 500 || error.statusCode === 502) {
+    pollDelay = Math.min(pollDelay * 2, 3600000); // Exponential backoff, capped at 1 hour
+    logWithTimestamp(`Error 500/502 from subreddit ${subreddit}. Increasing poll delay to ${pollDelay / 1000} seconds.`, "WARN");
+  } else if (error.message.includes("getaddrinfo EAI_AGAIN")) {
+    logWithTimestamp(`Network error fetching comments from subreddit ${subreddit}: ${error.message}. Retrying...`, "ERROR");
+  } else if (error.message.includes("ECONNRESET")) {
+    logWithTimestamp(`Connection reset while fetching comments from subreddit ${subreddit}. Retrying...`, "ERROR");
+  } else {
+    logWithTimestamp(`Error fetching comments from subreddit ${subreddit}: ${error.message}`, "ERROR");
+  }
 }
 
 function processComment(comment, subreddit) {
@@ -81,13 +90,12 @@ function processComment(comment, subreddit) {
 
   processedCommentIds.add(comment.id);
   const licenseCommands = extractLicenseCommands(comment.body);
-
   const newLicenses = Array.from(licenseCommands).filter((license) => !processedLicenses.has(license));
 
   if (newLicenses.length > 0) {
     newLicenses.forEach((license) => processedLicenses.add(license)); // Mark these licenses as processed
     logWithTimestamp(
-      `Processing comment ID ${comment.id} from subreddit ${subreddit} with License ID's: ${newLicenses.join(", ")}`,
+      `Processing comment ID ${comment.id} from subreddit ${subreddit} with License IDs: ${newLicenses.join(", ")}`,
       "INFO"
     );
     enqueueUpdate(() => updateGist(newLicenses));
@@ -162,9 +170,8 @@ async function updateLatestGist(licenseCommands) {
 
     if (uniqueContent.length !== existingContent.length || !uniqueContent.every((line, index) => line === existingContent[index])) {
       await updateGistContent(gistId, "Latest Steam Games", uniqueContent.join("\n"));
-      //logWithTimestamp("Gist updated with the latest 40 games.", "INFO");
     } else {
-      logWithTimestamp("No new unique licenses found for the latest Gist: Content is up-to-date.", "INFO");
+      logWithTimestamp("No new unique licenses for Latest Gist: Content is up-to-date.", "INFO");
     }
   } catch (error) {
     handleGistError(error, () => enqueueUpdate(() => updateLatestGist(licenseCommands)), "Latest Steam Games");

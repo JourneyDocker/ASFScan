@@ -24,7 +24,7 @@ const snoowrapConfig = {
 };
 
 const client = new snoowrap(snoowrapConfig);
-const BOT_START = Date.now() / 1000;
+const BOT_START = Math.floor(Date.now() / 1000);
 const processedCommentIds = new Set();
 
 const subreddits = [
@@ -67,14 +67,12 @@ function fetchAndProcessComments(subreddit) {
       comments.forEach((comment) => processComment(comment, subreddit));
       pollDelay = 20000; // Reset poll delay on success
     })
-    .catch((error) => {
-      handleFetchError(error, subreddit);
-    });
+    .catch((error) => handleFetchError(error, subreddit));
 }
 
 function handleFetchError(error, subreddit) {
-  if (error.statusCode === 500 || error.statusCode === 502) {
-    pollDelay = Math.min(pollDelay * 2, 3600000); // Exponential backoff, capped at 1 hour
+  if ([500, 502].includes(error.statusCode)) {
+    pollDelay = Math.max(20000, Math.min(pollDelay * 2, 3600000)); // Exponential backoff, capped at 1 hour
     logWithTimestamp(`Error 500/502 from subreddit ${subreddit}. Increasing poll delay to ${pollDelay / 1000} seconds.`, "WARN");
   } else if (error.message.includes("getaddrinfo EAI_AGAIN")) {
     logWithTimestamp(`Network error fetching comments from subreddit ${subreddit}: ${error.message}. Retrying...`, "ERROR");

@@ -48,11 +48,7 @@ function pollSubreddits() {
 
   Promise.all(subreddits.map(fetchAndProcessComments))
     .catch((error) => {
-      if (error instanceof AggregateError) {
-        logWithTimestamp("Multiple errors occurred while fetching comments: AggregateError", "ERROR");
-      } else {
-        logWithTimestamp(`Error fetching comments: ${error.message}`, "ERROR");
-      }
+      handleFetchError(error);
       setTimeout(pollSubreddits, 600000); // Switch to 10-minute delay on error
     })
     .finally(() => {
@@ -74,10 +70,8 @@ function handleFetchError(error, subreddit) {
   if ([500, 502].includes(error.statusCode)) {
     pollDelay = Math.max(20000, Math.min(pollDelay * 2, 3600000)); // Exponential backoff, capped at 1 hour
     logWithTimestamp(`Error 500/502 from subreddit ${subreddit}. Increasing poll delay to ${pollDelay / 1000} seconds.`, "WARN");
-  } else if (error.message.includes("getaddrinfo EAI_AGAIN")) {
-    logWithTimestamp(`Network error fetching comments from subreddit ${subreddit}: ${error.message}. Retrying...`, "ERROR");
-  } else if (error.message.includes("ECONNRESET")) {
-    logWithTimestamp(`Connection reset while fetching comments from subreddit ${subreddit}. Retrying...`, "ERROR");
+  } else if (error.message.includes("getaddrinfo EAI_AGAIN") || error.message.includes("ECONNRESET")) {
+    logWithTimestamp(`Network issue while fetching comments from subreddit ${subreddit}: ${error.message}. Retrying...`, "ERROR");
   } else {
     logWithTimestamp(`Error fetching comments from subreddit ${subreddit}: ${error.message}`, "ERROR");
   }

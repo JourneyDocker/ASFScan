@@ -1,4 +1,4 @@
-FROM node:alpine
+FROM node:22.9-alpine
 
 WORKDIR /usr/src/app
 
@@ -8,7 +8,7 @@ EXPOSE 3000
 # Install curl to use in the health check
 RUN apk add --no-cache curl tzdata
 
-# Copy package.json and package-lock.json (or npm-shrinkwrap.json) and install dependencies
+# Copy package.json and package-lock.json and install dependencies
 COPY package*.json ./
 RUN npm install
 

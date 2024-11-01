@@ -1,8 +1,12 @@
-/node_modules
-/config.json
-/gh-config.json
-docker-compose.yml
-.env
+# Directories to ignore
+node_modules/
+
+# Temporary or lock files
+*.tmp
+log.txt
 pnpm-lock.yaml
 bun.lockb
 package-lock.json
+
+# Ignore configuration files
+.env

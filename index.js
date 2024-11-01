@@ -3,11 +3,8 @@ import snoowrap from "snoowrap";
 import { Octokit } from "@octokit/rest";
 import express from "express";
 
-// Custom log function with timestamp, date, and log level
-function logWithTimestamp(message, level = "INFO") {
-  const timestamp = new Date().toLocaleString("en-US", { hour12: true });
-  console.log(`[${timestamp}] [${level}] ${message}`);
-}
+// Import custom logger module
+import logger from "./lib/logger.js";
 
 // Initialize Express app
 const app = express();
@@ -26,6 +23,7 @@ const snoowrapConfig = {
 const client = new snoowrap(snoowrapConfig);
 const BOT_START = Math.floor(Date.now() / 1000);
 const processedCommentIds = new Set();
+const updateQueue = [];
 
 const subreddits = [
   "FreeGameFindings",
@@ -37,44 +35,26 @@ const subreddits = [
   "Freegamestuff",
 ];
 
-const updateQueue = [];
 let processedLicenses = new Set();
-let pollDelay = 20000; // Start with a 20-second delay
 
-logWithTimestamp("Bot is starting up and monitoring subreddits...");
+logger.info("Bot is starting up and monitoring subreddits...");
 
-function pollSubreddits() {
+async function pollSubreddits() {
+  let delay = 20000; // 20 seconds default delay
   processedLicenses = new Set(); // Reset processed licenses for this cycle
 
-  Promise.all(subreddits.map(fetchAndProcessComments))
-    .catch((error) => {
-      handleFetchError(error);
-      setTimeout(pollSubreddits, 600000); // Switch to 10-minute delay on error
-    })
-    .finally(() => {
-      setTimeout(pollSubreddits, pollDelay);
-    });
-}
-
-function fetchAndProcessComments(subreddit) {
-  return client.getSubreddit(subreddit)
-    .getNewComments({ limit: 100 })
-    .then((comments) => {
-      comments.forEach((comment) => processComment(comment, subreddit));
-      pollDelay = 20000; // Reset poll delay on success
-    })
-    .catch((error) => handleFetchError(error, subreddit));
-}
-
-function handleFetchError(error, subreddit) {
-  if ([500, 502].includes(error.statusCode)) {
-    pollDelay = Math.max(20000, Math.min(pollDelay * 2, 3600000)); // Exponential backoff, capped at 1 hour
-    logWithTimestamp(`Error 500/502 from subreddit ${subreddit}. Increasing poll delay to ${pollDelay / 1000} seconds.`, "WARN");
-  } else if (error.message.includes("getaddrinfo EAI_AGAIN") || error.message.includes("ECONNRESET")) {
-    logWithTimestamp(`Network issue while fetching comments from subreddit ${subreddit}: ${error.message}. Retrying...`, "ERROR");
-  } else {
-    logWithTimestamp(`Error fetching comments from subreddit ${subreddit}: ${error.message}`, "ERROR");
+  for (const subreddit of subreddits) {
+    try {
+      const comments = await client.getSubreddit(subreddit).getNewComments({ limit: 100 });
+      for (const comment of comments) {
+        processComment(comment, subreddit);
+      }
+    } catch (error) {
+      logger.fetchError(subreddit, error);
+      delay = 600000; // Switch to 10-minute delay on error
+    }
   }
+  setTimeout(pollSubreddits, delay);
 }
 
 function processComment(comment, subreddit) {
@@ -85,11 +65,11 @@ function processComment(comment, subreddit) {
   const newLicenses = Array.from(licenseCommands).filter((license) => !processedLicenses.has(license));
 
   if (newLicenses.length > 0) {
-    newLicenses.forEach((license) => processedLicenses.add(license)); // Mark these licenses as processed
-    logWithTimestamp(
-      `Processing comment ID ${comment.id} from subreddit ${subreddit} with License IDs: ${newLicenses.join(", ")}`,
-      "INFO"
-    );
+    for (const license of newLicenses) {
+      processedLicenses.add(license); // Mark these licenses as processed
+    }
+    const threadTitle = comment.link_title;  // Retrieve the thread title
+    logger.processingComment(threadTitle, subreddit, newLicenses);
     enqueueUpdate(() => updateGist(newLicenses));
   }
 }
@@ -97,10 +77,14 @@ function processComment(comment, subreddit) {
 function extractLicenseCommands(commentBody) {
   const licensePattern = /!addlicense\s+(?:asf\s+)?([as]\/[0-9]+(?:,[as]\/[0-9]+)*)/gi;
   const licenseCommands = new Set();
-  let match;
+  let match = licensePattern.exec(commentBody);
 
-  while ((match = licensePattern.exec(commentBody)) !== null) {
-    match[1].split(",").forEach((license) => licenseCommands.add(license.trim()));
+  while (match !== null) {
+    const licenses = match[1].split(",");
+    for (const license of licenses) {
+      licenseCommands.add(license.trim());
+    }
+    match = licensePattern.exec(commentBody); // Move to the next match
   }
 
   return licenseCommands;
@@ -133,20 +117,20 @@ async function updateGist(licenseCommands) {
     const uniqueContent = mergeUniqueContent(existingContent, licenseCommands);
 
     if (uniqueContent.length === existingContent.length) {
-      logWithTimestamp("No new licenses added: All found licenses are already present.", "INFO");
+      logger.noNewLicenses();
       return;
     }
 
     await updateGistContent(gistId, "Steam Codes", uniqueContent.join("\n"));
     await updateLatestGist(licenseCommands);
   } catch (error) {
-    handleGistError(error, () => enqueueUpdate(() => updateGist(licenseCommands)), "Steam Codes");
+    logger.gistUpdateError("Steam Codes", error);
+    enqueueUpdate(() => updateGist(licenseCommands)); // Retry on error
   }
 }
 
 function mergeUniqueContent(existingContent, newContent) {
-  const uniqueSet = new Set([...existingContent, ...newContent]);
-  return Array.from(uniqueSet);
+  return Array.from(new Set([...existingContent, ...newContent]));
 }
 
 async function updateLatestGist(licenseCommands) {
@@ -162,30 +146,16 @@ async function updateLatestGist(licenseCommands) {
 
     if (uniqueContent.length !== existingContent.length || !uniqueContent.every((line, index) => line === existingContent[index])) {
       await updateGistContent(gistId, "Latest Steam Games", uniqueContent.join("\n"));
-    } else {
-      logWithTimestamp("No new unique licenses for Latest Gist: Content is up-to-date.", "INFO");
     }
   } catch (error) {
-    handleGistError(error, () => enqueueUpdate(() => updateLatestGist(licenseCommands)), "Latest Steam Games");
+    logger.gistUpdateError("Latest Steam Games", error);
+    enqueueUpdate(() => updateLatestGist(licenseCommands)); // Retry on error
   }
 }
 
 async function updateGistContent(gistId, filename, content) {
-  try {
-    await octokit.gists.update({ gist_id: gistId, files: { [filename]: { content } } });
-    logWithTimestamp(`Gist content for ${filename} updated successfully.`, "INFO");
-  } catch (error) {
-    throw error; // Re-throw to be caught by the caller
-  }
-}
-
-function handleGistError(error, retryCallback, gistName) {
-  if (error.status === 409) {
-    logWithTimestamp(`Conflict error while updating Gist (${gistName}): ${error.message}. Retrying in 5 seconds...`, "WARN");
-    setTimeout(retryCallback, 5000); // Retry after 5 seconds
-  } else {
-    logWithTimestamp(`Error updating Gist (${gistName}): ${error.message}`, "ERROR");
-  }
+  await octokit.gists.update({ gist_id: gistId, files: { [filename]: { content } } });
+  logger.gistUpdateSuccess(filename);
 }
 
 // Health check endpoint
@@ -196,7 +166,7 @@ app.get("/health", (req, res) => {
 // Start the Express server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  logWithTimestamp(`Health check endpoint running on port ${PORT}`, "INFO");
+  logger.info(`Health check endpoint running on port ${PORT}`);
 });
 
 // Start polling subreddits

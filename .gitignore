@@ -3,7 +3,6 @@ node_modules/
 
 # Temporary or lock files
 *.tmp
-log.txt
 pnpm-lock.yaml
 bun.lockb
 package-lock.json

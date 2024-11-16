@@ -75,16 +75,22 @@ function processComment(comment, subreddit) {
 }
 
 function extractLicenseCommands(commentBody) {
-  const licensePattern = /!addlicense\s+(?:asf\s+)?([as]\/[0-9]+(?:,[as]\/[0-9]+)*)/gi;
+  // Updated regex pattern to capture app/ and sub/ along with other prefixes
+  const licensePattern = /(?:!?addlicense)\s+(?:asf\s+)?((?:[as]\/\d+|app\/\d+)(?:,\s*(?:[as]\/\d+|app\/\d+))*)/gi;
   const licenseCommands = new Set();
   let match = licensePattern.exec(commentBody);
 
   while (match !== null) {
-    const licenses = match[1].split(",");
+    // Match the license and replace app/ with a/ and sub/ with s/
+    let license = match[1].trim();
+    // Replace `app/` with `a/` and `sub/` with `s/`
+    license = license.replace(/\bapp\//g, 'a/').replace(/\bsub\//g, 's/');
+    // Split by comma and add each license to the set
+    const licenses = license.split(",");
     for (const license of licenses) {
-      licenseCommands.add(license.trim());
+      licenseCommands.add(license.trim()); // Add the license to the set after trimming whitespace
     }
-    match = licensePattern.exec(commentBody); // Move to the next match
+    match = licensePattern.exec(commentBody); // Move to next match
   }
 
   return licenseCommands;

@@ -109,8 +109,9 @@ async function updateGist(licenseCommands) {
     const gist = await octokit.gists.get({ gist_id: gistId });
     const existingContent = gist.data.files["Steam Codes"].content.split("\n");
     const updatedContent = mergeUniqueContent(existingContent, licenseCommands);
-
-    if (hasContentChanged(existingContent, updatedContent)) {
+    const recentContent = existingContent.slice(-40);
+    const newLicensesNotInRecent = licenseCommands.filter((license) => !recentContent.includes(license));
+    if (newLicensesNotInRecent.length > 0 && hasContentChanged(existingContent, updatedContent)) {
       await updateGistContent(gistId, "Steam Codes", updatedContent.join("\n"));
       await updateLatestGist(licenseCommands);
     } else {

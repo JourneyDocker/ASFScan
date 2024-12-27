@@ -11,15 +11,22 @@
     "tracker"
   ],
   "enabled": true,
-  "extends": [
-    "config:recommended",
-    ":rebaseStalePrs"
+  "enabledManagers": [
+    "dockerfile",
+    "github-actions",
+    "npm"
   ],
-  "groupName": "all",
+  "extends": [
+    ":rebaseStalePrs",
+    "config:recommended",
+    "group:allNonMajor",
+    "schedule:earlyMondays"
+  ],
   "forkProcessing": "enabled",
   "labels": [
     "dependencies"
   ],
+  "rangeStrategy": "bump",
   "rebaseWhen": "conflicted",
   "suppressNotifications": [
     "prIgnoreNotification"

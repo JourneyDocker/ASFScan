@@ -4,6 +4,7 @@
 .idea/
 .vscode/
 node_modules/
+renovate.json
 
 # Ignore common archive and executable files
 *.exe

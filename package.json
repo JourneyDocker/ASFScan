@@ -10,7 +10,7 @@
   "author": "Journey Over",
   "license": "MIT",
   "dependencies": {
-    "@octokit/rest": "^21.0.2",
+    "@octokit/rest": "^21.1.0",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "snoowrap": "^1.23.0"

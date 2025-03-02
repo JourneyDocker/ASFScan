@@ -1,8 +1,7 @@
-import "dotenv/config";
 import snoowrap from "snoowrap";
 import { Octokit } from "@octokit/rest";
 import express from "express";
-import logger from "./lib/logger.js"; // Custom logger module
+import logger from "./lib/logger.js";
 
 const app = express();
 

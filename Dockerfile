@@ -1,7 +1,7 @@
 FROM python:3.13.2-alpine
 
 # Install dependencies
-RUN apk add --no-cache curl tzdata
+RUN apk add --no-cache curl jq tzdata
 
 # Set working directory
 WORKDIR /app
@@ -21,4 +21,4 @@ CMD ["python", "ASFScan.py"]
 
 # Health check to ensure the application is up and running
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
-  CMD curl --silent --fail http://localhost:3000/health | grep -q "Bot is alive and running." || exit 1
+  CMD curl --silent --fail http://localhost:3000/health | jq -e '.status == "running"' > /dev/null || exit 1

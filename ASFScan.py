@@ -2,7 +2,10 @@ import os
 import time
 import re
 import threading
-from flask import Flask
+import http.server
+import socketserver
+import json
+from threading import Thread
 import praw
 from github import Github
 from dotenv import load_dotenv
@@ -10,11 +13,11 @@ from dotenv import load_dotenv
 # Import custom logger
 from lib.logger import logger
 
+# Version information
+VERSION = "2.0.0-dev"
+
 # Load environment variables from .env file
 load_dotenv()
-
-# Initialize Flask app for health check
-app = Flask(__name__)
 
 # Configure GitHub and Reddit clients
 github = Github(os.environ.get('ghToken'))
@@ -29,6 +32,7 @@ reddit = praw.Reddit(
 # Constants and state tracking
 BOT_START = int(time.time())  # Bot start timestamp
 processed_comment_ids = set()  # Track processed comments
+MAX_PROCESSED_COMMENTS = 1000  # Limit memory usage
 processed_licenses = set()  # Track processed licenses
 update_queue = []  # Queue for sequential Gist updates
 update_lock = threading.Lock()  # Lock for thread safety
@@ -37,7 +41,7 @@ update_lock = threading.Lock()  # Lock for thread safety
 subreddits = [
     "FreeGameFindings",
     "FreeGamesForPC",
-    # "testingground4bots",
+#    "testingground4bots",
     "FreeGamesForSteam",
     "FreeGamesOnSteam",
     "freegames",
@@ -64,6 +68,13 @@ def process_comment(comment, subreddit_name):
         return
 
     processed_comment_ids.add(comment.id)
+    # Limit the size of processed_comment_ids to prevent memory growth
+    if len(processed_comment_ids) > MAX_PROCESSED_COMMENTS:
+        # Remove oldest items (approximation since sets don't maintain order)
+        to_remove = len(processed_comment_ids) - MAX_PROCESSED_COMMENTS
+        for _ in range(to_remove):
+            processed_comment_ids.pop()
+
     license_commands = extract_license_commands(comment.body)
     new_licenses = [license for license in license_commands if license not in processed_licenses]
 
@@ -90,50 +101,75 @@ def has_content_changed(existing_content, updated_content):
 
 # Update content of a specific Gist file
 def update_gist_content(gist_id, filename, content):
-    gist = github.get_gist(gist_id)
-    gist.edit(files={filename: github.InputFileContent(content)})
-    logger["gist_update_success"](filename)
+    try:
+        gist = github.get_gist(gist_id)
+        gist.edit(files={filename: github.InputFileContent(content)})
+        logger["gist_update_success"](filename)
+    except github.GithubException as e:
+        # Check for rate limiting
+        if e.status == 403 and 'rate limit' in str(e).lower():
+            retry_after = int(e.headers.get('Retry-After', 60))
+            logger["rate_limit"]("GitHub", retry_after)
+            time.sleep(retry_after)
+            # Retry after waiting
+            update_gist_content(gist_id, filename, content)
+        else:
+            raise
 
 # Update the main "Steam Codes" Gist
 def update_gist(license_commands):
-    try:
-        gist_id = os.environ.get('gistId')
-        gist = github.get_gist(gist_id)
-        existing_content = gist.files["Steam Codes"].content.split("\n")
-        updated_content = merge_unique_content(existing_content, license_commands)
-        recent_content = existing_content[-40:] if len(existing_content) >= 40 else existing_content
-        new_licenses_not_in_recent = [license for license in license_commands if license not in recent_content]
+    max_retries = 3
+    retry_count = 0
 
-        if new_licenses_not_in_recent and has_content_changed(existing_content, updated_content):
-            update_gist_content(gist_id, "Steam Codes", "\n".join(updated_content))
-            update_latest_gist(license_commands)
-        else:
-            logger["no_new_licenses"]()
-    except Exception as e:
-        logger["gist_update_error"]("Steam Codes", e)
-        # Retry after a delay
-        time.sleep(5)
-        return update_gist(license_commands)
+    while retry_count < max_retries:
+        try:
+            gist_id = os.environ.get('gistId')
+            gist = github.get_gist(gist_id)
+            existing_content = gist.files["Steam Codes"].content.split("\n")
+            updated_content = merge_unique_content(existing_content, license_commands)
+            recent_content = existing_content[-40:] if len(existing_content) >= 40 else existing_content
+            new_licenses_not_in_recent = [license for license in license_commands if license not in recent_content]
+
+            if new_licenses_not_in_recent and has_content_changed(existing_content, updated_content):
+                update_gist_content(gist_id, "Steam Codes", "\n".join(updated_content))
+                update_latest_gist(license_commands)
+            else:
+                logger["no_new_licenses"]()
+            return
+        except Exception as e:
+            logger["gist_update_error"]("Steam Codes", e)
+            retry_count += 1
+            # Exponential backoff
+            time.sleep(5 * retry_count)
+
+    logger["error"]("Failed to update gist after multiple retries")
 
 # Update the "Latest Steam Games" Gist with recent licenses
 def update_latest_gist(license_commands):
-    try:
-        gist_id = "2a611b12813fc06e17b89fcf00834e8c"
-        gist = github.get_gist(gist_id)
-        existing_content = gist.files["Latest Steam Games"].content.split("\n")
-        updated_content = merge_unique_content(existing_content, license_commands)
+    max_retries = 3
+    retry_count = 0
 
-        # Keep last 40 entries
-        if len(updated_content) > 40:
-            updated_content = updated_content[-40:]
+    while retry_count < max_retries:
+        try:
+            gist_id = os.environ.get('latestGistId', "2a611b12813fc06e17b89fcf00834e8c")
+            gist = github.get_gist(gist_id)
+            existing_content = gist.files["Latest Steam Games"].content.split("\n")
+            updated_content = merge_unique_content(existing_content, license_commands)
 
-        if has_content_changed(existing_content, updated_content):
-            update_gist_content(gist_id, "Latest Steam Games", "\n".join(updated_content))
-    except Exception as e:
-        logger["gist_update_error"]("Latest Steam Games", e)
-        # Retry after a delay
-        time.sleep(5)
-        return update_latest_gist(license_commands)
+            # Keep last 40 entries
+            if len(updated_content) > 40:
+                updated_content = updated_content[-40:]
+
+            if has_content_changed(existing_content, updated_content):
+                update_gist_content(gist_id, "Latest Steam Games", "\n".join(updated_content))
+            return
+        except Exception as e:
+            logger["gist_update_error"]("Latest Steam Games", e)
+            retry_count += 1
+            # Exponential backoff
+            time.sleep(5 * retry_count)
+
+    logger["error"]("Failed to update latest gist after multiple retries")
 
 # Add update to the queue
 def enqueue_update(license_commands):
@@ -171,17 +207,57 @@ def poll_subreddits():
                 for comment in subreddit.comments(limit=100):
                     process_comment(comment, subreddit_name)
             except Exception as e:
-                logger["fetch_error"](subreddit_name, e)
-                delay = 600  # Increase delay to 10 minutes on error
+                # Check for Reddit rate limits
+                if hasattr(e, 'response') and e.response.status_code == 429:
+                    retry_after = int(e.response.headers.get('Retry-After', 600))
+                    logger["rate_limit"]("Reddit", retry_after)
+                    delay = retry_after
+                else:
+                    logger["fetch_error"](subreddit_name, e)
+                    delay = 600  # Increase delay to 10 minutes on error
 
         # Ensure delay is always positive
         safe_delay = max(1, delay)
         time.sleep(safe_delay)
 
-# Health check endpoint
-@app.route('/health')
-def health_check():
-    return "Bot is alive and running."
+# Custom HTTP handler for health check
+class HealthCheckHandler(http.server.SimpleHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == '/health':
+            uptime = int(time.time()) - BOT_START
+            uptime_str = f"{uptime // 86400}d {(uptime % 86400) // 3600}h {(uptime % 3600) // 60}m {uptime % 60}s"
+
+            health_info = {
+                "status": "running",
+                "version": VERSION,
+                "uptime": uptime_str,
+                "processed_comments": len(processed_comment_ids),
+                "queued_updates": len(update_queue),
+                "monitored_subreddits": len(subreddits)
+            }
+
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps(health_info).encode())
+        else:
+            self.send_response(404)
+            self.send_header('Content-type', 'text/plain')
+            self.end_headers()
+            self.wfile.write(b"Not found")
+
+    def log_message(self, format, *args):
+        # Suppress default logging
+        return
+
+# Start HTTP server for health check in a separate thread
+def start_health_server(port):
+    handler = HealthCheckHandler
+    server = socketserver.TCPServer(("0.0.0.0", port), handler)
+    server_thread = Thread(target=server.serve_forever)
+    server_thread.daemon = True
+    server_thread.start()
+    logger["info"](f"Health check server started on port {port}")
 
 # Start polling in a separate thread
 def start_polling():
@@ -190,8 +266,16 @@ def start_polling():
     polling_thread.start()
 
 if __name__ == "__main__":
-    logger["info"]("Bot started and monitoring subreddits...")
+    logger["info"](f"ASFScan v{VERSION} started and monitoring subreddits...")
     start_polling()
-    # Start the Flask app
+
+    # Start the health check server
     port = int(os.environ.get('PORT', 3000))
-    app.run(host='0.0.0.0', port=port)
+    start_health_server(port)
+
+    # Keep the main thread running
+    try:
+        while True:
+            time.sleep(60)
+    except KeyboardInterrupt:
+        logger["info"]("Bot shutting down...")

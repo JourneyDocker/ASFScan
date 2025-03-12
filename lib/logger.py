@@ -58,6 +58,10 @@ def gist_update_success(filename):
 def no_new_licenses():
     info("No new licenses added: All detected licenses were either already processed previously or are already present at the bottom of the list.")
 
+# Log message for API rate limits
+def rate_limit(service, retry_after):
+    warn(f"{service} API rate limit reached. Waiting {retry_after} seconds before retrying.")
+
 # Make the logger functions available as module attributes
 logger = {
     "info": info,
@@ -67,5 +71,6 @@ logger = {
     "gist_update_error": gist_update_error,
     "processing_comment": processing_comment,
     "gist_update_success": gist_update_success,
-    "no_new_licenses": no_new_licenses
+    "no_new_licenses": no_new_licenses,
+    "rate_limit": rate_limit
 }

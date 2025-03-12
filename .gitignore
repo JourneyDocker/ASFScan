@@ -1,5 +1,7 @@
 # Directories to ignore
-node_modules/
+*.py[cod]
+*$py.class
+.venv/
 
 # Temporary or lock files
 *.tmp

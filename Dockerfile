@@ -1,5 +1,5 @@
 # Use an Alpine-based bun image
-FROM oven/bun:1.2.4-alpine
+FROM oven/bun:1.2.5-alpine
 
 # Install dependencies and set up app directory
 RUN apk add --no-cache curl tzdata && \

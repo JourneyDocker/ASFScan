@@ -1,24 +1,23 @@
-# Use an Alpine-based bun image
-FROM oven/bun:1.2.4-alpine
-
-# Install dependencies and set up app directory
-RUN apk add --no-cache curl tzdata && \
-    mkdir -p /app && \
-    chown -R bun:bun /app
-
-# Set working directory and copy package.json for dependency installation
-WORKDIR /app
-COPY package.json ./
+FROM python:3.13.2-alpine
 
 # Install dependencies
-RUN bun install
+RUN apk add --no-cache curl tzdata
 
-# Copy application source code
-COPY --chown=bun:bun . .
+# Set working directory
+WORKDIR /app
 
-# Use non-root user and set default command
-USER bun
-CMD ["bun", "index.js"]
+# Copy requirements and install dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY . .
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+
+# Command to run the application
+CMD ["python", "ASFScan.py"]
 
 # Health check to ensure the application is up and running
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 \

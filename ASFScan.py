@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 from lib.logger import logger
 
 # Version information
-VERSION = "2.0.0-dev"
+VERSION = "2.0.0-dev2"
 
 # Load environment variables from .env file
 load_dotenv()
@@ -22,7 +22,7 @@ load_dotenv()
 # Configure GitHub and Reddit clients
 github = Github(os.environ.get('ghToken'))
 reddit = praw.Reddit(
-    user_agent=os.environ.get('userAgent'),
+    user_agent=f"ASFScan:v{VERSION} (by u/Static_Love; bot for monitoring free games)",
     client_id=os.environ.get('clientId'),
     client_secret=os.environ.get('clientSecret'),
     username=os.environ.get('RedditUsername'),
@@ -151,8 +151,7 @@ def update_latest_gist(license_commands):
 
     while retry_count < max_retries:
         try:
-            gist_id = os.environ.get('latestGistId', "2a611b12813fc06e17b89fcf00834e8c")
-            gist = github.get_gist(gist_id)
+            gist = github.get_gist("2a611b12813fc06e17b89fcf00834e8c")
             existing_content = gist.files["Latest Steam Games"].content.split("\n")
             updated_content = merge_unique_content(existing_content, license_commands)
 
@@ -161,7 +160,7 @@ def update_latest_gist(license_commands):
                 updated_content = updated_content[-40:]
 
             if has_content_changed(existing_content, updated_content):
-                update_gist_content(gist_id, "Latest Steam Games", "\n".join(updated_content))
+                update_gist_content(gist.id, "Latest Steam Games", "\n".join(updated_content))
             return
         except Exception as e:
             logger["gist_update_error"]("Latest Steam Games", e)

@@ -7,14 +7,14 @@ import socketserver
 import json
 from threading import Thread
 import praw
-from github import Github
+from github import Github, GithubException, InputFileContent
 from dotenv import load_dotenv
 
 # Import custom logger
 from lib.logger import logger
 
 # Version information
-VERSION = "2.0.0-dev2"
+VERSION = "2.0.0-dev3"
 
 # Load environment variables from .env file
 load_dotenv()
@@ -103,9 +103,9 @@ def has_content_changed(existing_content, updated_content):
 def update_gist_content(gist_id, filename, content):
     try:
         gist = github.get_gist(gist_id)
-        gist.edit(files={filename: github.InputFileContent(content)})
+        gist.edit(files={filename: InputFileContent(content)})
         logger["gist_update_success"](filename)
-    except github.GithubException as e:
+    except GithubException as e:
         # Check for rate limiting
         if e.status == 403 and 'rate limit' in str(e).lower():
             retry_after = int(e.headers.get('Retry-After', 60))

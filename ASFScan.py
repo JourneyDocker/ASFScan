@@ -7,20 +7,20 @@ import socketserver
 import json
 from threading import Thread
 import praw
-from github import Github, GithubException, InputFileContent
+from github import Github, GithubException, InputFileContent, Auth
 from dotenv import load_dotenv
 
 # Import custom logger
 from lib.logger import logger
 
 # Version information
-VERSION = "2.0.0"
+VERSION = "2.1.0"
 
 # Load environment variables from .env file
 load_dotenv()
 
 # Configure GitHub and Reddit clients
-github = Github(os.environ.get('ghToken'))
+github = Github(auth=Auth.Token(os.environ.get('ghToken')))
 reddit = praw.Reddit(
     user_agent=f"ASFScan:v{VERSION} (by u/Static_Love; bot for monitoring free games)",
     client_id=os.environ.get('clientId'),
@@ -30,12 +30,13 @@ reddit = praw.Reddit(
 )
 
 # Constants and state tracking
-BOT_START = int(time.time())  # Bot start timestamp
-processed_comment_ids = set()  # Track processed comments
-MAX_PROCESSED_COMMENTS = 1000  # Limit memory usage
-processed_licenses = set()  # Track processed licenses
-update_queue = []  # Queue for sequential Gist updates
-update_lock = threading.Lock()  # Lock for thread safety
+BOT_START = int(time.time()) # Bot start time
+LAST_PROCESSED = BOT_START # Last processed comment timestamp
+processed_comment_ids = set() # Processed comment IDs
+MAX_PROCESSED_COMMENTS = 1000 # Max processed comments to keep
+processed_licenses = set() # Processed license commands
+update_queue = [] # Update queue for pending updates
+update_lock = threading.Lock() # Lock for synchronizing updates
 
 # Subreddits to monitor
 subreddits = [
@@ -71,8 +72,7 @@ def process_comment(comment, subreddit_name):
     # Limit the size of processed_comment_ids to prevent memory growth
     if len(processed_comment_ids) > MAX_PROCESSED_COMMENTS:
         # Remove oldest items (approximation since sets don't maintain order)
-        to_remove = len(processed_comment_ids) - MAX_PROCESSED_COMMENTS
-        for _ in range(to_remove):
+        for _ in range(len(processed_comment_ids) - MAX_PROCESSED_COMMENTS):
             processed_comment_ids.pop()
 
     license_commands = extract_license_commands(comment.body)
@@ -88,7 +88,7 @@ def process_comment(comment, subreddit_name):
 def merge_unique_content(existing_content, new_content):
     return [line for line in existing_content if line not in new_content] + list(new_content)
 
-# Check if content has changed
+# Check if the content has changed
 def has_content_changed(existing_content, updated_content):
     if len(existing_content) != len(updated_content):
         return True
@@ -170,56 +170,74 @@ def update_latest_gist(license_commands):
 
     logger["error"]("Failed to update latest gist after multiple retries")
 
+# Function to process the update queue
+def queue_worker():
+    while True:
+        license_commands = None
+        with update_lock:
+            if update_queue:
+                license_commands = update_queue.pop(0)
+        if license_commands:
+            try:
+                update_gist(license_commands)
+            except Exception as e:
+                logger["error"](f"Error processing queue: {str(e)}")
+        else:
+            time.sleep(1)
+
 # Add update to the queue
 def enqueue_update(license_commands):
     with update_lock:
         update_queue.append(license_commands)
-    process_queue()
 
-# Process updates from the queue
-def process_queue():
-    with update_lock:
-        if not update_queue:
-            return
-        license_commands = update_queue.pop(0)
+# Start the queue worker thread
+def start_queue_worker():
+    worker_thread = threading.Thread(target=queue_worker)
+    worker_thread.daemon = True
+    worker_thread.start()
+    logger["info"]("Queue worker started.")
 
+# Stream comments from monitored subreddits
+def stream_comments():
+    subreddit_str = '+'.join(subreddits)
+    subreddit = reddit.subreddit(subreddit_str)
     try:
-        update_gist(license_commands)
+        for comment in subreddit.stream.comments(skip_existing=True):
+            process_comment(comment, comment.subreddit.display_name)
     except Exception as e:
-        logger["error"](f"Error processing queue: {str(e)}")
-    finally:
-        # Process next item if any
-        with update_lock:
-            if update_queue:
-                # Use threading to avoid recursion
-                threading.Thread(target=process_queue).start()
+        logger["fetch_error"]("Streaming", e)
+        time.sleep(10)
+        stream_comments()
+
+# Catch up on missed comments
+def catch_up_comments():
+    global LAST_PROCESSED
+    for subreddit_name in subreddits:
+        try:
+            subreddit = reddit.subreddit(subreddit_name)
+            for comment in subreddit.comments(limit=100):
+                if comment.created_utc > LAST_PROCESSED:
+                    process_comment(comment, subreddit_name)
+        except Exception as e:
+            logger["fetch_error"](subreddit_name, e)
+    LAST_PROCESSED = int(time.time())
+
+# Hybrid monitoring function
+def hybrid_reddit_monitor():
+    stream_thread = threading.Thread(target=stream_comments)
+    stream_thread.daemon = True
+    stream_thread.start()
+    while True:
+        catch_up_comments()
+        time.sleep(300)
 
 # Poll subreddits for new comments
-def poll_subreddits():
-    while True:
-        delay = 20  # Default delay in seconds
-        processed_licenses.clear()  # Reset processed licenses
+def start_polling():
+    monitor_thread = threading.Thread(target=hybrid_reddit_monitor)
+    monitor_thread.daemon = True
+    monitor_thread.start()
 
-        for subreddit_name in subreddits:
-            try:
-                subreddit = reddit.subreddit(subreddit_name)
-                for comment in subreddit.comments(limit=100):
-                    process_comment(comment, subreddit_name)
-            except Exception as e:
-                # Check for Reddit rate limits
-                if hasattr(e, 'response') and e.response.status_code == 429:
-                    retry_after = int(e.response.headers.get('Retry-After', 600))
-                    logger["rate_limit"]("Reddit", retry_after)
-                    delay = retry_after
-                else:
-                    logger["fetch_error"](subreddit_name, e)
-                    delay = 600  # Increase delay to 10 minutes on error
-
-        # Ensure delay is always positive
-        safe_delay = max(1, delay)
-        time.sleep(safe_delay)
-
-# Custom HTTP handler for health check
+# Health check endpoint
 class HealthCheckHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         if self.path == '/health':
@@ -244,12 +262,11 @@ class HealthCheckHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header('Content-type', 'text/plain')
             self.end_headers()
             self.wfile.write(b"Not found")
-
     def log_message(self, format, *args):
         # Suppress default logging
         return
 
-# Start HTTP server for health check in a separate thread
+# Start the health check server
 def start_health_server(port):
     handler = HealthCheckHandler
     server = socketserver.TCPServer(("0.0.0.0", port), handler)
@@ -258,21 +275,16 @@ def start_health_server(port):
     server_thread.start()
     logger["info"](f"Health check server started on port {port}")
 
-# Start polling in a separate thread
-def start_polling():
-    polling_thread = threading.Thread(target=poll_subreddits)
-    polling_thread.daemon = True
-    polling_thread.start()
-
+# Main entry point
 if __name__ == "__main__":
     logger["info"](f"ASFScan v{VERSION} started and monitoring subreddits...")
+
+    start_queue_worker()
     start_polling()
 
-    # Start the health check server
     port = int(os.environ.get('PORT', 3000))
     start_health_server(port)
 
-    # Keep the main thread running
     try:
         while True:
             time.sleep(60)

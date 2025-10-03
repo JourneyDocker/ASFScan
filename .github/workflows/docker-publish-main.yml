@@ -11,8 +11,9 @@ permissions:
 
 jobs:
   call-reusable-workflow:
-    uses: JourneyDocker/github-workflows/.github/workflows/docker-publish-github-only.yml@main
+    uses: JourneyDocker/github-workflows/.github/workflows/docker-publish.yml@main
     with:
       tag: main
       platforms: linux/amd64
+      registry: github
     secrets: inherit

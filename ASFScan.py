@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 from lib.logger import logger
 
 # Version information
-VERSION = "2.1.0"
+VERSION = "2.1.1-dev"
 
 # Load environment variables from .env file
 load_dotenv()
@@ -197,17 +197,22 @@ def start_queue_worker():
     worker_thread.start()
     logger["info"]("Queue worker started.")
 
-# Stream comments from monitored subreddits
-def stream_comments():
-    subreddit_str = '+'.join(subreddits)
-    subreddit = reddit.subreddit(subreddit_str)
-    try:
-        for comment in subreddit.stream.comments(skip_existing=True):
-            process_comment(comment, comment.subreddit.display_name)
-    except Exception as e:
-        logger["fetch_error"]("Streaming", e)
-        time.sleep(10)
-        stream_comments()
+# Stream comments from a single subreddit
+def stream_comments(subreddit_name):
+    subreddit = reddit.subreddit(subreddit_name)
+    retry_count = 0
+    while True:
+        try:
+            for comment in subreddit.stream.comments(skip_existing=True):
+                process_comment(comment, subreddit_name)
+            retry_count = 0  # Reset on success
+        except Exception as e:
+            logger["fetch_error"](subreddit_name, e)
+            sleep_time = 10 * (2 ** retry_count)
+            if sleep_time > 600:  # Cap at 10 minutes
+                sleep_time = 600
+            time.sleep(sleep_time)
+            retry_count += 1
 
 # Catch up on missed comments
 def catch_up_comments():
@@ -220,13 +225,17 @@ def catch_up_comments():
                     process_comment(comment, subreddit_name)
         except Exception as e:
             logger["fetch_error"](subreddit_name, e)
+            time.sleep(5)  # Small delay before trying next subreddit
     LAST_PROCESSED = int(time.time())
 
 # Hybrid monitoring function
 def hybrid_reddit_monitor():
-    stream_thread = threading.Thread(target=stream_comments)
-    stream_thread.daemon = True
-    stream_thread.start()
+    stream_threads = []
+    for subreddit_name in subreddits:
+        thread = threading.Thread(target=stream_comments, args=(subreddit_name,))
+        thread.daemon = True
+        thread.start()
+        stream_threads.append(thread)
     while True:
         catch_up_comments()
         time.sleep(300)

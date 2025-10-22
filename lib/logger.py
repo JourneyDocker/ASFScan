@@ -34,11 +34,11 @@ def fetch_error(subreddit, error_obj):
 
     # Server errors or connectivity issues trigger a delay
     if status_code in [500, 502]:
-        warn(f"Reddit server error (HTTP {status_code}) for r/{subreddit}. Switching to 10-minute delay mode.")
+        warn(f"Reddit server error (HTTP {status_code}) for r/{subreddit}. Will retry shortly.")
     elif "getaddrinfo EAI_AGAIN" in message or "ECONNRESET" in message:
-        warn(f"Network connectivity issue with r/{subreddit}: {message}. Switching to 10-minute delay mode.")
+        warn(f"Network connectivity issue with r/{subreddit}: {message}. Will retry shortly.")
     else:
-        error(f"Unexpected error fetching comments from r/{subreddit}: {message}. Switching to 10-minute delay mode.")
+        error(f"Unexpected error fetching comments from r/{subreddit}: {message}. Will retry shortly.")
 
 # Handle errors while updating Gists
 def gist_update_error(gist_name, error_obj):

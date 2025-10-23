@@ -1,4 +1,5 @@
 from datetime import datetime
+import threading
 
 # Log levels for consistent message formatting
 log_levels = {
@@ -9,10 +10,14 @@ log_levels = {
     "UNKNOWN": "[UNKNOWN]"
 }
 
+# Lock for thread-safe logging
+log_lock = threading.Lock()
+
 # Main logging function with timestamp and log level
 def log(level, message):
     timestamp = datetime.now().strftime("%m/%d/%Y, %I:%M:%S %p")
-    print(f"[{timestamp}] {log_levels.get(level, log_levels['UNKNOWN'])} {message}")
+    with log_lock:
+        print(f"[{timestamp}] {log_levels.get(level, log_levels['UNKNOWN'])} {message}")
 
 # Simple wrapper functions for each log level
 def info(message):

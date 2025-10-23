@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 from lib.logger import logger
 
 # Version information
-VERSION = "2.1.1-dev"
+VERSION = "2.1.1-dev2"
 
 # Load environment variables from .env file
 load_dotenv()
@@ -77,6 +77,8 @@ def process_comment(comment, subreddit_name):
 
     license_commands = extract_license_commands(comment.body)
     new_licenses = [license for license in license_commands if license not in processed_licenses]
+
+    logger["processed_comment_debug"](subreddit_name, len(license_commands), len(new_licenses))
 
     if new_licenses:
         for license in new_licenses:
@@ -142,7 +144,7 @@ def update_gist(license_commands):
             # Exponential backoff
             time.sleep(5 * retry_count)
 
-    logger["error"]("Failed to update gist after multiple retries")
+    logger["latest_gist_update_failed"]()
 
 # Update the "Latest Steam Games" Gist with recent licenses
 def update_latest_gist(license_commands):
@@ -181,7 +183,7 @@ def queue_worker():
             try:
                 update_gist(license_commands)
             except Exception as e:
-                logger["error"](f"Error processing queue: {str(e)}")
+                logger["queue_processing_error"](str(e))
         else:
             time.sleep(1)
 
@@ -195,10 +197,11 @@ def start_queue_worker():
     worker_thread = threading.Thread(target=queue_worker)
     worker_thread.daemon = True
     worker_thread.start()
-    logger["info"]("Queue worker started.")
+    logger["queue_worker_started"]()
 
 # Stream comments from a single subreddit
 def stream_comments(subreddit_name):
+    logger["starting_stream"](subreddit_name)
     subreddit = reddit.subreddit(subreddit_name)
     retry_count = 0
     while True:
@@ -217,6 +220,7 @@ def stream_comments(subreddit_name):
 # Catch up on missed comments
 def catch_up_comments():
     global LAST_PROCESSED
+    logger["starting_catchup"]()
     for subreddit_name in subreddits:
         try:
             subreddit = reddit.subreddit(subreddit_name)
@@ -227,6 +231,7 @@ def catch_up_comments():
             logger["fetch_error"](subreddit_name, e)
             time.sleep(5)  # Small delay before trying next subreddit
     LAST_PROCESSED = int(time.time())
+    logger["catchup_completed"]()
 
 # Hybrid monitoring function
 def hybrid_reddit_monitor():
@@ -282,11 +287,11 @@ def start_health_server(port):
     server_thread = Thread(target=server.serve_forever)
     server_thread.daemon = True
     server_thread.start()
-    logger["info"](f"Health check server started on port {port}")
+    logger["health_server_started"](port)
 
 # Main entry point
 if __name__ == "__main__":
-    logger["info"](f"ASFScan v{VERSION} started and monitoring subreddits...")
+    logger["bot_started"](VERSION)
 
     start_queue_worker()
     start_polling()
@@ -298,4 +303,4 @@ if __name__ == "__main__":
         while True:
             time.sleep(60)
     except KeyboardInterrupt:
-        logger["info"]("Bot shutting down...")
+        logger["bot_shutting_down"]()

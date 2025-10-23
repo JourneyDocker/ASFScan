@@ -66,6 +66,50 @@ def no_new_licenses():
 def rate_limit(service, retry_after):
     warn(f"{service} API rate limit exceeded. Pausing operations for {retry_after} seconds before next attempt.")
 
+# Log when starting comment stream for a subreddit
+def starting_stream(subreddit_name):
+    info(f"Starting comment stream for r/{subreddit_name}")
+
+# Log when starting catch-up on missed comments
+def starting_catchup():
+    info("Starting catch-up on missed comments")
+
+# Log when catch-up is completed
+def catchup_completed():
+    info("Catch-up completed")
+
+# Log debug info for processed comment
+def processed_comment_debug(subreddit_name, found, new):
+    debug(f"Processed comment from r/{subreddit_name}: found {found} license commands, {new} new")
+
+# Log when gist update fails after retries
+def gist_update_failed():
+    error("Failed to update gist after multiple retries")
+
+# Log when latest gist update fails after retries
+def latest_gist_update_failed():
+    error("Failed to update latest gist after multiple retries")
+
+# Log error in queue processing
+def queue_processing_error(error_msg):
+    error(f"Error processing queue: {error_msg}")
+
+# Log when queue worker starts
+def queue_worker_started():
+    info("Queue worker started.")
+
+# Log when health server starts
+def health_server_started(port):
+    info(f"Health check server started on port {port}")
+
+# Log when bot starts
+def bot_started(version):
+    info(f"ASFScan v{version} started and monitoring subreddits...")
+
+# Log when bot shuts down
+def bot_shutting_down():
+    info("Bot shutting down...")
+
 # Make the logger functions available as module attributes
 logger = {
     "info": info,
@@ -77,5 +121,16 @@ logger = {
     "processing_comment": processing_comment,
     "gist_update_success": gist_update_success,
     "no_new_licenses": no_new_licenses,
-    "rate_limit": rate_limit
+    "rate_limit": rate_limit,
+    "starting_stream": starting_stream,
+    "starting_catchup": starting_catchup,
+    "catchup_completed": catchup_completed,
+    "processed_comment_debug": processed_comment_debug,
+    "gist_update_failed": gist_update_failed,
+    "latest_gist_update_failed": latest_gist_update_failed,
+    "queue_processing_error": queue_processing_error,
+    "queue_worker_started": queue_worker_started,
+    "health_server_started": health_server_started,
+    "bot_started": bot_started,
+    "bot_shutting_down": bot_shutting_down
 }

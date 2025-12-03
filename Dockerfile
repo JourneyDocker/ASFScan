@@ -1,4 +1,4 @@
-FROM python:3.14.0-alpine
+FROM python:3.14.1-alpine
 
 # Install dependencies
 RUN apk add --no-cache curl jq tzdata

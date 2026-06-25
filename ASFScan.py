@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 from lib.logger import logger
 
 # Version information
-VERSION = "2.1.2-dev"
+VERSION = "2.1.2"
 
 # Load environment variables from .env file
 load_dotenv()
